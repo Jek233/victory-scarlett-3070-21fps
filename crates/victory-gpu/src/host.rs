@@ -1336,6 +1336,9 @@ pub(crate) struct HostList {
     /// depends on ([`HostList::changed_something`]); no two lists have the
     /// same.
     epoch: std::sync::atomic::AtomicU64,
+    /// Left open and empty, as made or reset, for the title's next reset
+    /// (`HostList::leave_open`): that reset finds nothing to undo.
+    left_open: [std::sync::atomic::AtomicU64; 2],
     /// Counts the list in [`ALIVE`] while it lives.
     _alive: Counted,
     /// The texts of the markers `note_op` set, in order (for device-removed
@@ -4496,6 +4499,7 @@ impl Host {
                 batch_args: Mutex::default(),
                 coming: Mutex::default(),
                 epoch: std::sync::atomic::AtomicU64::new(next_epoch()),
+                left_open: [const { std::sync::atomic::AtomicU64::new(0) }; 2],
                 _alive: Counted::new(),
                 #[cfg(feature = "diagnostics")]
                 notes,
@@ -6730,6 +6734,7 @@ impl HostList {
 
     pub(crate) fn close(&self) {
         let _closing = crate::timeline::span("closing a host list");
+        self.left_open[0].store(0, Ordering::Release);
         self.twins_to_depth();
         self.textures_back();
         let scratch = self.indirect_args.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -6782,9 +6787,38 @@ impl HostList {
             .splice(at..at, found.into_iter().map(|(shadow, from, to)| Step::Refresh(shadow, from as usize, (to - from) as usize)));
     }
 
+    pub(crate) fn leave_open(&self) {
+        static ON: OnceLock<bool> = OnceLock::new();
+        if !*ON.get_or_init(|| std::env::var_os("VICTORY_FRESH_OPEN").is_none_or(|v| v != "0")) {
+            self.close();
+            return;
+        }
+        self.left_open[0].store(self.epoch() + 1, Ordering::Release);
+    }
+
+    pub(crate) fn close_if_left_open(&self) {
+        if self.left_open[0].load(Ordering::Acquire) != 0 {
+            self.close();
+        }
+    }
+
+    fn still_left_open(&self) -> bool {
+        let epoch = self.left_open[0].swap(0, Ordering::AcqRel);
+        if epoch == 0 {
+            return false;
+        }
+        if epoch == self.epoch() + 1 {
+            return true;
+        }
+        // SAFETY: our list, open; what went into it goes with the reset.
+        let _ = unsafe { self.list.Close() };
+        false
+    }
+
     /// Only after the list's last submission finished (every one is waited
     /// for).
     pub(crate) fn reset(&self) {
+        let left_open = self.still_left_open();
         self.changed_something();
         #[cfg(feature = "diagnostics")]
         let started = std::time::Instant::now();
@@ -6816,14 +6850,16 @@ impl HostList {
                 give_chunks(std::mem::take(&mut scratch.chunks));
             }
         }
-        // SAFETY: the list is not executing.
-        let reset = unsafe {
-            self.allocator
-                .Reset()
-                .and_then(|()| self.list.Reset(&self.allocator, None))
-        };
-        if let Err(e) = reset {
-            fail(format_args!("a host command list did not reset ({e})"));
+        if !left_open {
+            // SAFETY: the list is not executing.
+            let reset = unsafe {
+                self.allocator
+                    .Reset()
+                    .and_then(|()| self.list.Reset(&self.allocator, None))
+            };
+            if let Err(e) = reset {
+                fail(format_args!("a host command list did not reset ({e})"));
+            }
         }
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::ResetNs, started.elapsed().as_nanos() as u64);

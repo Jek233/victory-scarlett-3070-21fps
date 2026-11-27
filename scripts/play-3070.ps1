@@ -91,7 +91,7 @@ $set = [ordered]@{
     VICTORY_BAKE_TEXTURES_MS     = '10000'
     VICTORY_HEAP_PASS_MAX        = '0'
     VICTORY_HEAP_CHANGED_MAX     = '0'
-    VICTORY_SKIP_PIPELINES       = '02384a60fda6f2d0,731a39171b568298'
+    VICTORY_LEAVE_OUT            = '02384a60fda6f2d0'
     VICTORY_WC_NO_BACK           = '1'
     VICTORY_WC_NO_BACK_MIN_KB    = '1024'
     VICTORY_SYNC_IN_PLACE        = '1'
@@ -103,6 +103,7 @@ $set = [ordered]@{
     VICTORY_TABLE_NAMED_ONLY     = '1'
     VICTORY_QUEUE_MARKS          = '1'
     VICTORY_PORT_CONSTANTS       = '1'
+    VICTORY_EARLY_DEPTH          = '1'
 }
 if ($Hooks) {
     $set.VICTORY_GPU_ONLY = '1'

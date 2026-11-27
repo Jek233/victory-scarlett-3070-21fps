@@ -89,7 +89,22 @@ fn family(shaders: &[Arc<Shader>]) -> Option<usize> {
     FAMILIES.iter().position(|name| named(shaders, name.as_bytes()))
 }
 
-fn left_out(family: Option<usize>) -> Option<&'static str> {
+fn leave_out() -> &'static [String] {
+    static HASHES: OnceLock<Vec<String>> = OnceLock::new();
+    HASHES.get_or_init(|| {
+        std::env::var("VICTORY_LEAVE_OUT")
+            .unwrap_or_default()
+            .split(',')
+            .map(|h| h.trim().to_ascii_lowercase())
+            .filter(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+            .collect()
+    })
+}
+
+fn left_out(shaders: &[Arc<Shader>], family: Option<usize>) -> Option<&'static str> {
+    if !leave_out().is_empty() && shaders.iter().any(|s| leave_out().contains(&s.hash)) {
+        return Some("named in VICTORY_LEAVE_OUT, left out");
+    }
     static SKIP_RT_RESOLVE: OnceLock<bool> = OnceLock::new();
     let skip_rt = *SKIP_RT_RESOLVE.get_or_init(|| {
         let builder = std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "1");
@@ -161,7 +176,7 @@ impl Pending {
             && shaders.iter().all(|s| s.stage != "mesh"))
             || scene_input;
         let family = family(&shaders);
-        let left_out = left_out(family);
+        let left_out = left_out(&shaders, family);
         Pending {
             family,
             queued_at: OnceLock::new(),
