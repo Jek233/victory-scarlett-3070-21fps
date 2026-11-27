@@ -3423,6 +3423,11 @@ impl Shadow {
         watched != NOT_WATCHED && (watched != GUARDED || !crate::watch::light())
     }
 
+    /// Whether the copy is view memory guarded by us (not asked of the kernel ahead).
+    pub(crate) fn is_guarded(&self) -> bool {
+        self.watched.load(Ordering::Relaxed) == GUARDED
+    }
+
     /// The copy's own number (see the field).
     pub(crate) fn id(&self) -> u64 {
         self.id

@@ -627,7 +627,12 @@ pub(crate) const R_OLD_TAKE: usize = 4;
 pub(crate) const R_TEXTURES: usize = 5;
 /// Every read of title memory into ours (`host::read`: the guarded copy, `safecopy`), any caller.
 pub(crate) const R_READ: usize = 6;
-const R_KINDS: usize = 7;
+/// Inside an ask (`watch::writes` when it must ask): the kernel's write-watch question (its pages),
+/// the guards' walk and re-arming (blocks found written), the journal note (pages noted).
+pub(crate) const R_ASK_KERNEL: usize = 7;
+pub(crate) const R_ASK_GUARD: usize = 8;
+pub(crate) const R_ASK_NOTE: usize = 9;
+const R_KINDS: usize = 10;
 static RS: [[std::sync::atomic::AtomicU64; 3]; R_KINDS] =
     [const { [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)] }; R_KINDS];
 
@@ -655,7 +660,7 @@ pub(crate) fn rsplit(kind: usize, at: std::time::Instant, bytes: usize) {
     let f = |k: usize| format!("{:.0} in {:.2} ms", v[k][0] as f64 / frames, v[k][1] as f64 / 1e6 / frames);
     tracing::info!(
         "refresh time split per frame (summed over the threads that ran them; VICTORY_REFRESH_SPLIT=1): stale path {} (its takes {}, {:.1} MB); \
-         today's path: asks {}, walks {} (their takes {}, {:.1} MB); texture refreshes in front {}; all reads of title memory (guarded copy) {} ({:.1} MB)",
+         today's path: asks {}, walks {} (their takes {}, {:.1} MB); texture refreshes in front {}; all reads of title memory (guarded copy) {} ({:.1} MB); asks inside: kernel {} over {:.0} pages, guards {} finding {:.0} blocks written, notes {} of {:.0} pages",
         f(R_FAST),
         f(R_FAST_TAKE),
         v[R_FAST_TAKE][2] as f64 / 1e6 / frames,
@@ -665,7 +670,13 @@ pub(crate) fn rsplit(kind: usize, at: std::time::Instant, bytes: usize) {
         v[R_OLD_TAKE][2] as f64 / 1e6 / frames,
         f(R_TEXTURES),
         f(R_READ),
-        v[R_READ][2] as f64 / 1e6 / frames
+        v[R_READ][2] as f64 / 1e6 / frames,
+        f(R_ASK_KERNEL),
+        v[R_ASK_KERNEL][2] as f64 / frames,
+        f(R_ASK_GUARD),
+        v[R_ASK_GUARD][2] as f64 / frames,
+        f(R_ASK_NOTE),
+        v[R_ASK_NOTE][2] as f64 / frames
     );
 }
 

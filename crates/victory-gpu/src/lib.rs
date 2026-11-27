@@ -140,5 +140,11 @@ pub use watch::{
     kernel_writing, title_memory_allocated, title_memory_freed, title_memory_reading, title_memory_remapped,
     Remapping, title_memory_remapping, title_memory_remapping_in, remap_notes_take, title_memory_splitting, title_memory_unmapping, title_memory_written,
 };
+// (V2, `VICTORY_SOFT_VIEWS`) Views of the page-mapping copies kept in the runtime's books alone.
+#[cfg(windows)]
+pub use watch::{
+    SOFT_BY_OUR_FAULT, SOFT_BY_OUR_WRITE, SOFT_BY_TITLE_CALL, SOFT_BY_TITLE_FAULT, SoftViews, soft_make_real, soft_view_counts,
+    soft_view_gone, soft_view_noted, soft_view_real, soft_view_would, use_soft_views,
+};
 #[cfg(windows)]
 pub use lockmeter::kernel_will_write; // (coder H) watch::writing, noted for the F23 meter first

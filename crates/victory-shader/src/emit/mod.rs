@@ -484,6 +484,58 @@ pub struct HostShader {
     /// view at these places as the unsigned format of the same layout
     /// (`descriptor::host::half_view`, host part). `VICTORY_HALF_VIEWS=0`: none.
     pub half_views: Vec<(u8, u32)>,
+    /// (Fox T, `VICTORY_TABLE_NAMED_ONLY`) Every descriptor of a table the code can read,
+    /// as (root parameter, descriptor in the table): from every scalar and global access
+    /// whose address traces to a table parameter ([`crate::resource::Resources::scalar`],
+    /// what lowering turns into heap indices), each descriptor the accessed dwords touch;
+    /// `u32::MAX` for a table read at a computed place (any of its descriptors). `None`:
+    /// not known (a shader made here, a spilled user-data table): every descriptor.
+    pub table_reads: Option<Vec<(u8, u32)>>,
+}
+
+/// See [`HostShader::table_reads`].
+pub(crate) fn table_reads(native: &NativeProgram, p: &ir::Program, res: &resource::Resources) -> Option<Vec<(u8, u32)>> {
+    if crate::spill::is_spilled(native) {
+        return None;
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for &(site, a) in &res.scalar {
+        let Some(rp) = native.layout.get(a.param) else { continue };
+        if rp.root != RootType::Table {
+            continue;
+        }
+        if a.dynamic.is_some() || a.offset >= 1 << 24 {
+            out.insert((rp.slot, u32::MAX));
+            continue;
+        }
+        let inst = p.blocks.get(site.0)?.insts.get(site.1)?;
+        let dwords = access_dwords(inst.name());
+        for k in a.offset / 32..=(a.offset + 4 * dwords - 1) / 32 {
+            out.insert((rp.slot, k));
+        }
+    }
+    // A buffer descriptor built around a table's address (none known): any descriptor.
+    for d in &res.descriptors {
+        for leaf in d.source.leaves() {
+            if let resource::Source::Built { address, .. } = leaf
+                && let Some(rp) = native.layout.get(address.param)
+                && rp.root == RootType::Table
+            {
+                out.insert((rp.slot, u32::MAX));
+            }
+        }
+    }
+    Some(out.into_iter().collect())
+}
+
+/// The dwords a memory instruction moves, at most (16 for a name not known).
+fn access_dwords(name: &str) -> u32 {
+    for (suffix, n) in [("x16", 16), ("x8", 8), ("x4", 4), ("x3", 3), ("x2", 2)] {
+        if name.contains(suffix) {
+            return n;
+        }
+    }
+    if name.contains("dword") || name.contains("byte") || name.contains("short") { 1 } else { 16 }
 }
 
 impl HostShader {
@@ -1348,6 +1400,7 @@ fn emit_program(
         root_uavs: l.root_uavs,
         root_indexed_views: res.root_indexed_views.clone(),
         half_views: l.half_views,
+        table_reads: table_reads(native, p, res),
     };
     Ok((shader, wave_size))
 }
@@ -2205,6 +2258,7 @@ mod tests {
             root_uavs: Vec::new(),
             root_indexed_views: Vec::new(),
             half_views: Vec::new(),
+            table_reads: None,
         };
         let file = |var: &str, stage| {
             std::env::var(var).ok().map(|p| super::HostShader {
@@ -2218,6 +2272,7 @@ mod tests {
                 root_uavs: Vec::new(),
                 root_indexed_views: Vec::new(),
                 half_views: Vec::new(),
+                table_reads: None,
             })
         };
         let ps = file("VICTORY_REF_PS", crate::HwStage::Ps).unwrap_or(ps);
@@ -2828,6 +2883,7 @@ mod tests {
             root_uavs: l.root_uavs,
             root_indexed_views: Vec::new(),
             half_views: Vec::new(),
+            table_reads: None,
         };
         let (root, pso) = host.compute_pipeline(&cs).unwrap();
         // Twelve dwords: the loads below run across the view's end.
@@ -2982,6 +3038,7 @@ mod tests {
                 root_uavs: l.root_uavs,
                 root_indexed_views: Vec::new(),
                 half_views: Vec::new(),
+                table_reads: None,
             };
             let (root, pso) = host.compute_pipeline(&cs).unwrap();
             let inputs: Vec<u32> = [
@@ -3547,6 +3604,7 @@ mod barycentric_tests {
             root_uavs: Vec::new(),
             root_indexed_views: Vec::new(),
             half_views: Vec::new(),
+            table_reads: None,
         };
         validate(&vs);
         // One triangle covers an 8x8 target, with attribute values 2, 6, 10.

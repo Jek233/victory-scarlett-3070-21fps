@@ -223,7 +223,7 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         })
         .map(|p| p.used)
         .unwrap_or_default();
-    let tables = crate::draw::TablePlan::new(&used, &host.root_indexed_views);
+    let tables = crate::draw::TablePlan::new(&used, &host.root_indexed_views, host.table_reads.as_deref());
     Ok(Translated {
         host,
         threads,
@@ -822,7 +822,7 @@ pub(crate) mod host;
 #[cfg(windows)]
 pub mod known;
 #[cfg(windows)]
-mod library;
+pub(crate) mod library;
 #[cfg(windows)]
 mod make;
 

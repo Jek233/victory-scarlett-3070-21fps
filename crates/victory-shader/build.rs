@@ -32,7 +32,12 @@ fn fnv(state: &mut [u64; 2], bytes: &[u8]) {
 }
 
 fn main() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    // (Fox T) The package's folder as cargo gives it when the script runs, not as it
+    // was when the script was compiled: a build folder copied from another tree (as
+    // the coders' copies are made) kept a script that read that other tree's sources,
+    // so the hash and the switch list (the shader cache's key) were another tree's.
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_owned());
+    let src = Path::new(&dir).join("src");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=Cargo.toml");
     let mut list = Vec::new();
@@ -41,7 +46,12 @@ fn main() {
     let mut state = [0xcbf2_9ce4_8422_2325u64, 0x8422_2325_cbf2_9ce4u64];
     let mut switches = std::collections::BTreeSet::new();
     for p in &list {
-        let rel = p.strip_prefix(&src).unwrap_or(p).to_string_lossy().replace('\\', "/");
+        // (Fox T) Every file by name: `rerun-if-changed=src` alone did not run this
+        // again when a file in it was edited (builds kept the hash and the switch list
+        // of an older source, and the shader cache served translations made with other
+        // values of switches added since).
+        println!("cargo:rerun-if-changed={}", p.display());
+        let rel =p.strip_prefix(&src).unwrap_or(p).to_string_lossy().replace('\\', "/");
         let text = std::fs::read(p).unwrap_or_default();
         fnv(&mut state, rel.as_bytes());
         fnv(&mut state, &(text.len() as u64).to_le_bytes());

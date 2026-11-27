@@ -98,6 +98,10 @@ $set = [ordered]@{
     VICTORY_SPANS_QUICK          = '1'
     VICTORY_SYNC_FINE            = '1'
     VICTORY_HEAP_SYNC_FIRST      = '1'
+    VICTORY_SOFT_VIEWS           = 'copies'
+    VICTORY_SAMPLERS_MADE        = '1'
+    VICTORY_TABLE_NAMED_ONLY     = '1'
+    VICTORY_QUEUE_MARKS          = '1'
 }
 if ($Hooks) {
     $set.VICTORY_GPU_ONLY = '1'

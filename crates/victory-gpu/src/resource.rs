@@ -307,6 +307,63 @@ pub(crate) fn target_format(format: u32) -> u32 {
     format
 }
 
+/// (Fox T) Whether `this` is a title R9G9B9E5 texture (67) whose host copy is
+/// the 16-bit float RGBA stand-in ([`target_format`]).
+#[cfg(windows)]
+pub(crate) fn e5_stand_in(this: This) -> bool {
+    !this.is_null() && pc_format(resource(this).desc.format) == 67 && stands_in(this)
+}
+
+/// (Fox T, `VICTORY_E5_ALPHA_ONE=1`, default off) A shader view of an R9G9B9E5
+/// target's stand-in reads alpha as 1, as a read of the console's format does
+/// (it has no alpha; the stand-in keeps what the pixel shader exported there).
+pub(crate) fn e5_alpha_one() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_E5_ALPHA_ONE").is_some_and(|v| v == "1"))
+}
+
+/// (Fox T, diagnostics) `VICTORY_E5_METER=1`: draws into R9G9B9E5 stand-in
+/// targets per frame, by pipeline and target index; line 'R9G9B9E5 targets'.
+pub(crate) fn e5_meter() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_E5_METER").is_some_and(|v| v == "1"))
+}
+
+static E5_DRAWS: std::sync::Mutex<Option<std::collections::HashMap<(std::sync::Arc<str>, usize), u64>>> = std::sync::Mutex::new(None);
+/// (`VICTORY_E5_ALPHA_ONE`) Views made with alpha read as 1, and of them
+/// with no description of the title's (left as they were).
+pub(crate) static E5_VIEWS: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// A draw of `pipeline` into an R9G9B9E5 stand-in at target `index`.
+pub(crate) fn e5_draw(pipeline: &std::sync::Arc<str>, index: usize) {
+    let mut m = E5_DRAWS.lock().unwrap_or_else(|e| e.into_inner());
+    *m.get_or_insert_with(Default::default).entry((pipeline.clone(), index)).or_insert(0) += 1;
+}
+
+/// For the frame lines.
+pub(crate) fn e5_line(frames: f64) {
+    let f = frames.max(1.0);
+    if e5_alpha_one() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let [a, b] = [0, 1].map(|i| E5_VIEWS[i].swap(0, Relaxed));
+        tracing::info!("R9G9B9E5 stand-in views (VICTORY_E5_ALPHA_ONE=1): {a} made with alpha read as 1, {b} without a description left as they were (since the last line)");
+    }
+    if !e5_meter() {
+        return;
+    }
+    let m = E5_DRAWS.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
+    let total: u64 = m.values().sum();
+    let mut v: Vec<_> = m.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    let top: Vec<String> = v.iter().take(16).map(|((p, i), n)| format!("{p} (target {i}) {:.1}", *n as f64 / f)).collect();
+    tracing::info!(
+        "R9G9B9E5 targets (VICTORY_E5_METER, stand-in R16G16B16A16_FLOAT) per frame: {:.1} draws into them, {} pipelines; top: {}",
+        total as f64 / f,
+        v.len(),
+        top.join("; ")
+    );
+}
+
 /// Whether the host copy of the title texture `this` is in a stand-in
 /// format ([`target_format`]): its texels are not laid out as the title's.
 #[cfg(windows)]

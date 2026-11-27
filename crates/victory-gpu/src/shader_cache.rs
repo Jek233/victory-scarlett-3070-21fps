@@ -280,6 +280,17 @@ fn encode(s: &HostShader) -> Vec<u8> {
         word(&mut out, u32::from(slot));
         word(&mut out, dword);
     }
+    // (Fox T, `VICTORY_TABLE_NAMED_ONLY`) The table descriptors the code reads; u32::MAX: not known.
+    match &s.table_reads {
+        None => word(&mut out, u32::MAX),
+        Some(reads) => {
+            word(&mut out, reads.len() as u32);
+            for &(slot, k) in reads {
+                word(&mut out, u32::from(slot));
+                word(&mut out, k);
+            }
+        }
+    }
     out
 }
 
@@ -353,6 +364,16 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
     for _ in 0..n {
         half_views.push((u8::try_from(r.word()?).ok()?, r.word()?));
     }
+    let n = r.word()?;
+    let table_reads = if n == u32::MAX {
+        None
+    } else {
+        let mut reads = Vec::with_capacity((n as usize).min(1024));
+        for _ in 0..n {
+            reads.push((u8::try_from(r.word()?).ok()?, r.word()?));
+        }
+        Some(reads)
+    };
     r.0.is_empty().then_some(HostShader {
         stage,
         dxil,
@@ -364,6 +385,7 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
         root_uavs,
         root_indexed_views,
         half_views,
+        table_reads,
     })
 }
 
@@ -399,6 +421,7 @@ mod tests {
                 shift: 5,
             }],
             half_views: vec![(0, 8), (4, 0)],
+            table_reads: Some(vec![(1, 0), (1, 3), (2, u32::MAX)]),
         }
     }
 
