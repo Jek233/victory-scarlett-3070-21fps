@@ -235,17 +235,18 @@ const _: () = assert!(size_of::<Mode>() == 32);
 fn display_size() -> (u32, u32) {
     static SIZE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
     *SIZE.get_or_init(|| {
-        let asked = std::env::var("VICTORY_DISPLAY_MODE").ok().and_then(|v| {
-            let (w, h) = v.trim().split_once(['x', 'X'])?;
-            Some((w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?))
-        });
-        let size = match asked {
-            Some((w, h)) if (640..=7680).contains(&w) && (360..=4320).contains(&h) => (w, h),
-            _ => (3840, 2160),
-        };
+        let size = asked_display_mode().unwrap_or((3840, 2160));
         tracing::info!(width = size.0, height = size.1, "display mode reported to the title");
         size
     })
+}
+
+/// `VICTORY_DISPLAY_MODE=WxH`, if set to a size from 640x360 to 7680x4320.
+pub fn asked_display_mode() -> Option<(u32, u32)> {
+    let v = std::env::var("VICTORY_DISPLAY_MODE").ok()?;
+    let (w, h) = v.trim().split_once(['x', 'X'])?;
+    let (w, h) = (w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?);
+    ((640..=7680).contains(&w) && (360..=4320).contains(&h)).then_some((w, h))
 }
 
 /// The console's mode list: one 4K mode at 60 Hz (the title looks

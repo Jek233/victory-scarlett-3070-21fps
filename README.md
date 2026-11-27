@@ -8,10 +8,11 @@ tuned for **8 GB NVIDIA GPUs** (tested on an RTX 3070 8 GB, 32 GB RAM, Windows 1
 **This repository contains no game files, code, or assets.** You need your own copy of the title.
 It is not affiliated with or endorsed by the title's developer or publisher. Licensed GPL-3.0-or-later.
 
-## What's Added on Top of `Op-lite/victory-scarlett` (`835ca60`)
+## What's Added on Top of `Op-lite/victory-scarlett` (`bc264a4`)
 
 - **8 GB VRAM & NVIDIA stability:**
-  - `VICTORY_TEXTURE_MIP_DROP=1` (`resource.rs`) — drops top mip levels of large placed textures (~75% less texture VRAM).
+  - `VICTORY_TEXTURE_MIP_DROP=1` (`resource.rs`) — drops top mip levels of large placed textures (~75% less texture VRAM; use `-MipDrop 0` on 12+ GB cards).
+  - Render-target VRAM reserve settle (`VICTORY_CARD_ROOM_FOR_TARGETS_SETTLE_MS=20000`, `resource.rs`).
   - Immediate idle VRAM eviction (`fxceless#1269`, `draw.rs`).
   - NVIDIA 1M descriptor-heap cap fix (`VICTORY_DYNAMIC_SLOTS=524288`, `descriptor/host.rs`).
   - Prelude allocator cap & recycling (`VICTORY_MAX_PRELUDES=32`, `host.rs`).
@@ -19,25 +20,39 @@ It is not affiliated with or endorsed by the title's developer or publisher. Lic
   - `TITLE_PAGES` working-set reporting (`xmem.rs`).
 - **Visual fixes:**
   - `R9G9B9E5` -> `R11G11B10_FLOAT` format stand-in (`resource.rs`, fixes purple/violet lighting & vegetation).
-  - Ambient leftover state fix (`ambient.rs`).
-  - Integer render-target unblending (`fxceless#501`, `pipeline.rs`, `pipeline/host.rs`).
-  - `VICTORY_SKIP_PIPELINES='02384a60fda6f2d0,731a39171b568298'` in `scripts/play-3070.ps1` (skips broken water/heat-haze blocks and decal-heap defrag).
+  - Underwater & above-water tiled volumetric light on NVIDIA Wave32 (`victory-shader/src/emit/mod.rs`).
+  - Ambient leftover state fix (`ambient.rs`) and integer render-target unblending (`fxceless#501`).
+  - `VICTORY_LEAVE_OUT='02384a60fda6f2d0'` in `scripts/play-3070.ps1` (skips the 11.85 ms decal-heap defrag pass in release builds).
 - **Performance & pacing:**
-  - 60 FPS frame-interval unlock (`VICTORY_FRAME_INTERVAL_MS=16.667`, `frame_rate.rs`, `frame.rs`, `run.rs`).
-  - Async stderr logging (`victory-core/src/logging.rs`).
+  - `VICTORY_PORT_CONSTANTS=1` (32-bit graphics heap in-place, `port.rs`, `inplace.rs`, `xmem.rs`).
+  - `VICTORY_WC_NO_BACK=1` + `VICTORY_WC_NO_BACK_MIN_KB=1024` (leaves ≥1 MB write-combined shader writes on GPU).
+  - Descriptor sync bundle (`VICTORY_SYNC_IN_PLACE=1`, `VICTORY_SPANS_QUICK=1`, `VICTORY_SYNC_FINE=1`, `VICTORY_HEAP_SYNC_FIRST=1`, `VICTORY_HEAP_SYNC_AT_SUBMIT=1`).
+  - `VICTORY_TEXBACK_ASYNC` (dedicated texture readback thread), `VICTORY_FRESH_OPEN` (keeps fresh host lists open), `O(n)` `TextureQueue::due`, selective `shadow::wide` wakes with `AtomicUsize`, touched-only `card_dirty`, and `!guarded` `PROTECTED` fast path.
+  - 60 FPS frame-interval unlock (`VICTORY_FRAME_INTERVAL_MS=16.667`) + async stderr logging.
   - Dedicated RTX 3070 8 GB launcher (`scripts/play-3070.ps1`, preserves default `%LOCALAPPDATA%\victory` saves & cache).
 
-## Build and Run
+## Build and Run (Quick Start)
 
-```powershell
-cargo build --release --locked -p victory
+You need [Rust](https://rustup.rs) and Visual Studio C++ Build Tools (with Windows SDK). Do **not** use `Play-Scarlett.cmd` (that runs the upstream launcher without 8 GB / NVIDIA flags).
 
-# First run (if you don't have a shader cache yet):
-.\scripts\play-3070.ps1 -Game 'C:\path\to\game_scarlett_master.exe' -Prewarm
+1. **Build the release binary once** (from inside this repo folder):
+   ```powershell
+   cargo build --release --bin victory
+   ```
 
-# Normal runs:
-.\scripts\play-3070.ps1 -Game 'C:\path\to\game_scarlett_master.exe'
-```
+2. **First run (prewarms shaders once, then launches):**
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\play-3070.ps1 -Prewarm -Game "C:\path\to\game_scarlett_master.exe"
+   ```
+
+3. **Normal runs (after shaders are cached):**
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\play-3070.ps1 -Game "C:\path\to\game_scarlett_master.exe"
+   ```
+
+- Logs are saved automatically to `runs\3070-YYYYMMDD-HHMMSS.log`.
+- `-Prewarm` stopping around ~25,700 shaders is normal (ray-tracing shaders are skipped while RT is off).
+- On **12+ GB VRAM** cards, add `-MipDrop 0` for full-resolution texture mips.
 
 ---
 

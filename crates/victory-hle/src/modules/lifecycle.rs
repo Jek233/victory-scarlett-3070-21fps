@@ -156,9 +156,8 @@ pub extern "system" fn CreateWindowExA(
 ///
 /// `VICTORY_BORDERLESS=1` instead makes a top-level window a borderless
 /// popup over the whole primary screen. The title's output is stretched to
-/// it, so it is undistorted only when that output has the screen's aspect.
-/// A Series S title can output a fixed 1920x1080 whatever
-/// `VICTORY_DISPLAY_MODE` says (sizing its window before it asks).
+/// it, so it is undistorted only when that output has the screen's aspect
+/// (`VICTORY_DISPLAY_MODE` set to it: see `crate::resolution`).
 fn fit(
     parent: HWND,
     style: u32,

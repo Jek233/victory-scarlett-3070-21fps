@@ -15,6 +15,8 @@ mod host;
 #[cfg(windows)]
 pub mod readback;
 #[cfg(windows)]
+pub mod resolution; // the title's output size (VICTORY_DISPLAY_MODE)
+#[cfg(windows)]
 pub mod chunkmeter;
 #[cfg(windows)]
 pub mod lockhook; // (coder H) F23 engine buffer lock hooks (VICTORY_LOCK_METER)
