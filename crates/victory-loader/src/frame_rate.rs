@@ -182,12 +182,37 @@ pub enum Patched {
 /// The image stays mapped and no thread runs its code yet.
 #[cfg(windows)]
 pub unsafe fn apply(base: usize, size: usize, rate: u32, sites: &[Site]) -> Vec<Patched> {
+    use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+    use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
     sites
         .iter()
         .map(|site| {
             let code = replacement(site.kind, rate);
-            // SAFETY: the caller's promise.
-            let done = unsafe { write_checked(base, size, site.at, site.bytes, &code) };
+            let len = code.len();
+            let done = (|| {
+                if site.bytes.len() < len || site.at.checked_add(site.bytes.len()).is_none_or(|end| end > size) {
+                    return Patched::Failed("outside the image");
+                }
+                let at = base + site.at;
+                // SAFETY: inside the mapped image (checked above).
+                let there = unsafe { std::slice::from_raw_parts(at as *const u8, site.bytes.len()) };
+                if there != site.bytes {
+                    return Patched::Differs;
+                }
+                let mut old = 0;
+                // SAFETY: the load's bytes, made writable for this and put
+                // back; nothing runs them yet.
+                unsafe {
+                    if VirtualProtect(at as *const _, len, PAGE_EXECUTE_READWRITE, &mut old) == 0 {
+                        return Patched::Failed("Windows would not make it writable");
+                    }
+                    std::ptr::copy_nonoverlapping(code.as_ptr(), at as *mut u8, len);
+                    VirtualProtect(at as *const _, len, old, &mut old);
+                    FlushInstructionCache(GetCurrentProcess(), at as *const _, len);
+                }
+                Patched::Done
+            })();
             let offset = format_args!("{:#x}", site.at);
             match done {
                 Patched::Done => tracing::info!(site = %offset, kind = ?site.kind, rate, "frame rate: the title's read of its frame rate setting patched (VICTORY_FRAME_INTERVAL_MS)"),
@@ -197,40 +222,6 @@ pub unsafe fn apply(base: usize, size: usize, rate: u32, sites: &[Site]) -> Vec<
             done
         })
         .collect()
-}
-
-/// Writes `code` at image offset `at` of the image of `size` bytes at
-/// `base`, if the bytes there (at least as many as `code`) are `expected`.
-///
-/// # Safety
-/// The image stays mapped and no thread runs its code yet.
-#[cfg(windows)]
-pub unsafe fn write_checked(base: usize, size: usize, at: usize, expected: &[u8], code: &[u8]) -> Patched {
-    use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
-    use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    let len = code.len();
-    if expected.len() < len || at.checked_add(expected.len()).is_none_or(|end| end > size) {
-        return Patched::Failed("outside the image");
-    }
-    let at = base + at;
-    // SAFETY: inside the mapped image (checked above).
-    let there = unsafe { std::slice::from_raw_parts(at as *const u8, expected.len()) };
-    if there != expected {
-        return Patched::Differs;
-    }
-    let mut old = 0;
-    // SAFETY: the expected bytes, made writable for this and put back;
-    // nothing runs them yet.
-    unsafe {
-        if VirtualProtect(at as *const _, len, PAGE_EXECUTE_READWRITE, &mut old) == 0 {
-            return Patched::Failed("Windows would not make it writable");
-        }
-        std::ptr::copy_nonoverlapping(code.as_ptr(), at as *mut u8, len);
-        VirtualProtect(at as *const _, len, old, &mut old);
-        FlushInstructionCache(GetCurrentProcess(), at as *const _, len);
-    }
-    Patched::Done
 }
 
 #[cfg(test)]

@@ -110,7 +110,7 @@ pub extern "system" fn CreateWindowExW(
     instance: HINSTANCE,
     param: *const c_void,
 ) -> HWND {
-    let (style, x, y, width, height) = fit(parent, style, x, y, width, height);
+    let (x, y, width, height) = fit(parent, x, y, width, height);
     // SAFETY: the title's own arguments, forwarded (the size fitted).
     let hwnd = unsafe {
         wm::CreateWindowExW(
@@ -136,7 +136,7 @@ pub extern "system" fn CreateWindowExA(
     instance: HINSTANCE,
     param: *const c_void,
 ) -> HWND {
-    let (style, x, y, width, height) = fit(parent, style, x, y, width, height);
+    let (x, y, width, height) = fit(parent, x, y, width, height);
     // SAFETY: the title's own arguments, forwarded (the size fitted).
     let hwnd = unsafe {
         wm::CreateWindowExA(
@@ -153,28 +153,7 @@ pub extern "system" fn CreateWindowExA(
 /// its proportions, and centred; what it shows is scaled to it (the swap
 /// chain stretches). `VICTORY_WINDOW_MAX=WIDTHxHEIGHT` applies a smaller
 /// limit without changing the title's render targets.
-///
-/// `VICTORY_BORDERLESS=1` instead makes a top-level window a borderless
-/// popup over the whole primary screen. The title's output is stretched to
-/// it, so it is undistorted only when that output has the screen's aspect
-/// (`VICTORY_DISPLAY_MODE` set to it: see `crate::resolution`).
-fn fit(
-    parent: HWND,
-    style: u32,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> (u32, i32, i32, i32, i32) {
-    if parent.is_null() && borderless() {
-        // SAFETY: plain queries.
-        let screen =
-            unsafe { (wm::GetSystemMetrics(wm::SM_CXSCREEN), wm::GetSystemMetrics(wm::SM_CYSCREEN)) };
-        if screen.0 > 0 && screen.1 > 0 {
-            tracing::info!(width, height, to = ?screen, "title window made borderless over the screen");
-            return (borderless_style(style), 0, 0, screen.0, screen.1);
-        }
-    }
+fn fit(parent: HWND, x: i32, y: i32, width: i32, height: i32) -> (i32, i32, i32, i32) {
     let mut area = RECT::default();
     // SAFETY: `area` receives the primary monitor's work area.
     let known =
@@ -182,25 +161,13 @@ fn fit(
     let limit = window_limit();
     let fitted = fit_with_limit(&area, width, height, limit);
     if !parent.is_null() || known == 0 || fitted == (width, height) {
-        return (style, x, y, width, height);
+        return (x, y, width, height);
     }
     tracing::info!(width, height, to = ?fitted, ?limit, "title window fitted to the screen");
     let (w, h) = fitted;
     let left = area.left + (area.right - area.left - w) / 2;
     let top = area.top + (area.bottom - area.top - h) / 2;
-    (style, left, top, w, h)
-}
-
-fn borderless() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_BORDERLESS").is_some_and(|v| v == "1"))
-}
-
-/// `style` as a popup without frame or caption. The system menu stays, so
-/// Alt+F4 still closes it.
-fn borderless_style(style: u32) -> u32 {
-    style & !(wm::WS_CAPTION | wm::WS_THICKFRAME | wm::WS_MINIMIZEBOX | wm::WS_MAXIMIZEBOX)
-        | wm::WS_POPUP
+    (left, top, w, h)
 }
 
 fn parse_window_limit(value: &str) -> Option<(i32, i32)> {
@@ -510,12 +477,6 @@ mod tests {
             fit_into(&area, wm::CW_USEDEFAULT, 0),
             (wm::CW_USEDEFAULT, 0)
         );
-    }
-
-    #[test]
-    fn borderless_drops_the_frame_but_keeps_visibility_and_close() {
-        let style = borderless_style(wm::WS_OVERLAPPEDWINDOW | wm::WS_VISIBLE);
-        assert_eq!(style, wm::WS_POPUP | wm::WS_SYSMENU | wm::WS_VISIBLE);
     }
 
     #[test]

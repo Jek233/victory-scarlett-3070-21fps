@@ -217,9 +217,6 @@ pub fn run(
     // SAFETY: as above.
     #[cfg(windows)]
     unsafe { victory_hle::lockhook::install(image.base()) };
-    // SAFETY: as above.
-    #[cfg(windows)]
-    unsafe { victory_hle::resolution::install(image.base(), image.info().size_of_image as usize) };
     // SAFETY: imports are bound; from here on we run title code.
     let main = unsafe { Arc::new(image).spawn_main(dlls)? };
     let code = main
