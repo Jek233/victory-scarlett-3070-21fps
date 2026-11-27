@@ -48,6 +48,8 @@ mod book;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod holders; // (fox F) VICTORY_HOLDERS: which buffer of ours lies where in the PC's memory
 #[cfg(windows)]
+mod heap_marks;
+#[cfg(windows)]
 mod host;
 #[cfg(windows)]
 mod indirect;

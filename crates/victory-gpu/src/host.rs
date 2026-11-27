@@ -5912,9 +5912,12 @@ impl Host {
         // settles them first, one sent ahead only if preparing it reads
         // what they write.
         // Or the reads are done on the card, behind the flights.
+        // The round of the heaps' records asked for when the title submitted
+        // these lists, if that is known (`crate::heap_marks`, 0: not).
+        let heaps_mark = if late { crate::heap_marks::needed() } else { 0 };
         // With `VICTORY_HEAP_SYNC_FIRST=1`: begin the heaps' records round now,
         // beside planning card steps and waiting for flights.
-        let first_heaps = (late && heap_sync_first()).then(crate::descriptor::begin_sync_heaps);
+        let first_heaps = (late && heaps_mark == 0 && heap_sync_first()).then(crate::descriptor::begin_sync_heaps);
         // (Coder W, `VICTORY_FILL_FROM_PLACED`) Fills that read a copy at its place read its source.
         if late && place::fill_from_placed() != 0 {
             let written = line().written.clone();
@@ -5959,7 +5962,11 @@ impl Host {
                 if let Some(first) = first {
                     std::mem::forget(first);
                 }
-                crate::descriptor::begin_sync_heaps()
+                if heaps_mark != 0 && !waited_for_flights {
+                    crate::descriptor::begin_sync_heaps_after(heaps_mark)
+                } else {
+                    crate::descriptor::begin_sync_heaps()
+                }
             }
         };
         // That list runs first, and is one of the submission's from here on.

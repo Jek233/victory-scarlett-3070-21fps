@@ -7,7 +7,9 @@ param(
     [switch]$Hooks,
     [switch]$ProbeRays,
     [switch]$RayTracing,
-    [switch]$Prewarm
+    [switch]$Prewarm,
+    # Fill the screen with a borderless window. The title outputs 1920x1080 whatever mode it is told, so on 21:9 this stretches
+    [switch]$Borderless
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -98,6 +100,7 @@ $set = [ordered]@{
     VICTORY_SPANS_QUICK          = '1'
     VICTORY_SYNC_FINE            = '1'
     VICTORY_HEAP_SYNC_FIRST      = '1'
+    VICTORY_HEAP_SYNC_AT_SUBMIT  = '1'
     VICTORY_SOFT_VIEWS           = 'copies'
     VICTORY_SAMPLERS_MADE        = '1'
     VICTORY_TABLE_NAMED_ONLY     = '1'
@@ -117,6 +120,7 @@ if ($ProbeRays -and -not $RayTracing) {
     $set.VICTORY_AMBIENT_AIR = '1.5'
 }
 if ($RayTracing) { $set.VICTORY_BVH_BUILDER = '1' }
+if ($Borderless) { $set.VICTORY_BORDERLESS = '1' }
 
 foreach ($k in $set.Keys) { Set-Item -Path "Env:$k" -Value $set[$k] }
 
@@ -131,7 +135,7 @@ New-Item -ItemType Directory -Force -Path $runsDir | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $logPath = Join-Path $runsDir "3070-$stamp.log"
 
-Write-Host "=== victory-scarlett RTX 3070 8GB (release, $Console, MipDrop=$MipDrop, PagePool=1) ===" -ForegroundColor Green
+Write-Host "=== victory-scarlett RTX 3070 8GB (release, $Console, MipDrop=$MipDrop, PagePool=1$(if ($Borderless) { ', borderless' })) ===" -ForegroundColor Green
 Write-Host "Log: $logPath"
 $ErrorActionPreference = 'Continue'
 & $exe run $Game --execute --console $Console 2>&1 | Tee-Object -FilePath $logPath
