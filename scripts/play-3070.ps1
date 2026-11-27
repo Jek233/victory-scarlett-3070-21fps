@@ -102,6 +102,7 @@ $set = [ordered]@{
     VICTORY_SAMPLERS_MADE        = '1'
     VICTORY_TABLE_NAMED_ONLY     = '1'
     VICTORY_QUEUE_MARKS          = '1'
+    VICTORY_PORT_CONSTANTS       = '1'
 }
 if ($Hooks) {
     $set.VICTORY_GPU_ONLY = '1'
