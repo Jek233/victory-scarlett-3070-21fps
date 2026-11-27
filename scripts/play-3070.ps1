@@ -92,6 +92,12 @@ $set = [ordered]@{
     VICTORY_HEAP_PASS_MAX        = '0'
     VICTORY_HEAP_CHANGED_MAX     = '0'
     VICTORY_SKIP_PIPELINES       = '02384a60fda6f2d0,731a39171b568298'
+    VICTORY_WC_NO_BACK           = '1'
+    VICTORY_WC_NO_BACK_MIN_KB    = '1024'
+    VICTORY_SYNC_IN_PLACE        = '1'
+    VICTORY_SPANS_QUICK          = '1'
+    VICTORY_SYNC_FINE            = '1'
+    VICTORY_HEAP_SYNC_FIRST      = '1'
 }
 if ($Hooks) {
     $set.VICTORY_GPU_ONLY = '1'

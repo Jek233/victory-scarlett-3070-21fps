@@ -2759,6 +2759,11 @@ fn relay_exact() -> bool {
     *ON.get_or_init(|| relay() && std::env::var_os("VICTORY_RELAY").is_none_or(|v| v == "2"))
 }
 
+fn heap_sync_first() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| crate::switch::on("VICTORY_HEAP_SYNC_FIRST"))
+}
+
 /// Whether the pieces the relay fetches from the card's memory come over the
 /// card's copy queue (`VICTORY_RELAY_COPY=1`) and not over the queue that
 /// draws.
@@ -5902,6 +5907,9 @@ impl Host {
         // settles them first, one sent ahead only if preparing it reads
         // what they write.
         // Or the reads are done on the card, behind the flights.
+        // With `VICTORY_HEAP_SYNC_FIRST=1`: begin the heaps' records round now,
+        // beside planning card steps and waiting for flights.
+        let first_heaps = (late && heap_sync_first()).then(crate::descriptor::begin_sync_heaps);
         // (Coder W, `VICTORY_FILL_FROM_PLACED`) Fills that read a copy at its place read its source.
         if late && place::fill_from_placed() != 0 {
             let written = line().written.clone();
@@ -5911,11 +5919,13 @@ impl Host {
         #[cfg(feature = "diagnostics")]
         ahead.part(12);
         stage.next("submit: waiting for flights it reads from");
+        let mut waited_for_flights = false;
         if !late {
             self.settle(&mut submitted, WHY_SYNC);
         } else if own.is_none()
             && let Some(why) = late_blocked(runs)
         {
+            waited_for_flights = true;
             // (Coder W, diagnostics) Who made this submission wait, and how long.
             #[cfg(feature = "diagnostics")]
             let (blame, waiting) = (
@@ -5938,7 +5948,15 @@ impl Host {
         ahead.part(13);
         // Descriptors the title copied into placed heaps directly, before
         // command lists that index those slots are submitted.
-        let heaps_synced = crate::descriptor::begin_sync_heaps();
+        let heaps_synced = match first_heaps {
+            Some(first) if !waited_for_flights => first,
+            first => {
+                if let Some(first) = first {
+                    std::mem::forget(first);
+                }
+                crate::descriptor::begin_sync_heaps()
+            }
+        };
         // That list runs first, and is one of the submission's from here on.
         let with: Vec<&HostList>;
         let runs = match &own {
@@ -9945,10 +9963,12 @@ impl Meter {
         split_line(frames);
         {
             let [passes, pieces, compares] = [0, 1, 2].map(|i| CARD_PASSES[i].swap(0, Ordering::Relaxed) as f64 / frames);
-            if passes + compares > 0.0 {
+            let wc_left = crate::shadow::WC_LEFT.swap(0, Ordering::Relaxed) as f64 / 1e6 / frames;
+            if passes + compares + wc_left > 0.0 {
                 tracing::info!(
                     "our passes over copies in the card's memory per frame: {passes:.0} hash passes over {pieces:.0} pieces after \
-                     ranges were sent up (VICTORY_CARD_REHASH_RUNS=1 joins them: now {}), {compares:.0} compare passes",
+                     ranges were sent up (VICTORY_CARD_REHASH_RUNS=1 joins them: now {}), {compares:.0} compare passes; \
+                     {wc_left:.1} MB declared written in write-combined memory left on the card (VICTORY_WC_NO_BACK)",
                     if rehash_runs() { "on" } else { "off" }
                 );
             }

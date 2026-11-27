@@ -212,6 +212,35 @@ pub(crate) struct HostHeap {
     /// other memory there makes stale, and which to look at again when the
     /// runtime maps, unmaps or writes memory ([`remapped`]).
     placed: std::sync::Arc<Mutex<Spans>>,
+    /// The slots that may be in `placed` (a slot noted there is put here
+    /// under its lock, and taken out when it is forgotten there; a slot
+    /// another's view made stale stays, which says only "may"): a write of
+    /// any other view needs nothing of `placed` ([`spans_quick`]).
+    spanned: Slots,
+}
+
+/// Since the last frame line: writes that left `placed` alone
+/// ([`spans_quick`]), writes that took its lock.
+pub(crate) static SPANS_QUICK: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// Whether a slot's write of no placed texture view leaves `placed` alone
+/// when the slot is not in it ([`HostHeap::spanned`]; `VICTORY_SPANS_QUICK=1`;
+/// off by default: its lock is taken for every write, as before).
+///
+/// Ported from Belobug/VIctory-Belobug-AMD a284ca7 (on by default there).
+/// Every record the pass over records copied as bytes mirrors went by that
+/// one lock of the heap, from six threads, with the title's own threads and
+/// the texture passes: 4 of the 16 ms a frame the submitting thread waited
+/// for that pass were its threads waiting there (their run city4, timeline
+/// 113). What is done is the same: forgetting a slot that is not there does
+/// nothing.
+fn spans_quick() -> bool {
+    #[cfg(feature = "diagnostics")]
+    if let Some(on) = crate::ab::pick("VICTORY_SPANS_QUICK") {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SPANS_QUICK").is_some_and(|v| v != "0"))
 }
 
 /// The spans of every view heap made ([`HostHeap::placed`]), for the
@@ -1014,28 +1043,49 @@ impl TextureQueue {
     ///   (run 52: 98% of the drawn pixels had no colour texture in the
     ///   first 3D frames).
     fn due(&self, frame: u64, max: usize) -> Vec<(u32, u64)> {
-        let mut again: Vec<(u64, u32, u64)> = Vec::new();
-        let mut fresh: Vec<(u64, u32, u64)> = Vec::new();
+        if max == 0 {
+            return Vec::new();
+        }
+        let mut again = Vec::new();
+        let mut fresh = Vec::new();
         for (&index, w) in self.slots.iter().filter(|(_, w)| w.due <= frame) {
             let class = if w.looks > 0 || w.mapped > 0 { &mut again } else { &mut fresh };
-            class.push((w.written, index, w.write));
+            class.push((index, w.write));
         }
-        // By the number of the write, counted over the run.
-        let newest_first = |a: &(u64, u32, u64), b: &(u64, u32, u64)| b.2.cmp(&a.2);
+        // Write numbers are unique. Partition each end before sorting so a
+        // full queue sorts only the entries this pass can actually serve.
+        let newest_first = |a: &(u32, u64), b: &(u32, u64)| b.1.cmp(&a.1);
+        if again.len() > max {
+            again.select_nth_unstable_by(max, newest_first);
+            again.truncate(max);
+        }
         again.sort_unstable_by(newest_first);
-        fresh.sort_unstable_by(newest_first);
-        let mut order: Vec<(u32, u64)> = again.iter().map(|&(_, index, write)| (index, write)).collect();
-        let (mut new, mut old) = (0, fresh.len());
-        while new < old && order.len() < max {
-            order.push((fresh[new].1, fresh[new].2));
-            new += 1;
-            if new < old && order.len() < max {
-                old -= 1;
-                order.push((fresh[old].1, fresh[old].2));
-            }
+        let take = (max - again.len()).min(fresh.len());
+        if take == 0 {
+            return again;
         }
-        order.truncate(max);
-        order
+        let new_count = take.div_ceil(2);
+        let old_count = take / 2;
+        if new_count < fresh.len() {
+            fresh.select_nth_unstable_by(new_count, newest_first);
+        }
+        let (newest, rest) = fresh.split_at_mut(new_count);
+        newest.sort_unstable_by(newest_first);
+        let mut oldest = &mut rest[..0];
+        if old_count > 0 {
+            let oldest_at = rest.len() - old_count;
+            if oldest_at > 0 {
+                rest.select_nth_unstable_by(oldest_at, newest_first);
+            }
+            oldest = &mut rest[oldest_at..];
+            oldest.sort_unstable_by(|a, b| newest_first(b, a));
+        }
+        again.reserve(take);
+        for (position, &entry) in newest.iter().enumerate() {
+            again.push(entry);
+            again.extend(oldest.get(position).copied());
+        }
+        again
     }
 
     /// The entry of `index` if it is still the write the pass was handed.
@@ -1687,6 +1737,7 @@ impl HostHeap {
                 }
                 spans
             },
+            spanned: Slots::new((count + extra) as usize),
         };
         // A slot never written is undefined: shaders reading one (a slot
         // the title wrote in a way we do not know, or a table entry no
@@ -2790,8 +2841,18 @@ impl HostHeap {
             }
             _ => None,
         };
-        let stale = {
+        // (Under the slot's lock, as every write of it: whether it is in
+        // `spanned` changes only here.)
+        let in_spans = |index: u32| {
+            let bit = 1u64 << (index % 64);
+            self.spanned.0.get(index as usize / 64).is_none_or(|w| w.load(std::sync::atomic::Ordering::Acquire) & bit != 0)
+        };
+        let stale = if placed_view.is_none() && !in_spans(index) && spans_quick() {
+            SPANS_QUICK[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Vec::new()
+        } else {
             use std::sync::atomic::Ordering::Relaxed;
+            SPANS_QUICK[1].fetch_add(1, Relaxed);
             let mut placed = self.placed.lock().unwrap_or_else(|e| e.into_inner());
             let span = placed_view.and_then(|(resource, start, first, held)| {
                 Some((start, start.saturating_add(placed.bytes(resource)?), first, held))
@@ -2801,6 +2862,7 @@ impl HostHeap {
                     SPANNED[0].fetch_min(start, Relaxed);
                     SPANNED[1].fetch_max(end, Relaxed);
                     placed.rule = stale_rule();
+                    self.spanned.put(index);
                     let stale = placed.note(index, start, end, !seen);
                     placed.shows(index, first, held);
                     // (Under the lock of `placed`: a later write of one of
@@ -2809,6 +2871,7 @@ impl HostHeap {
                 }
                 None => {
                     placed.forget(index);
+                    self.spanned.remove(index);
                     Vec::new()
                 }
             }
@@ -4793,6 +4856,48 @@ impl Copied<'_> {
         let last = unsafe { std::slice::from_raw_parts_mut(self.at.add(at), end - at) };
         changed_records(last, &records[..end - at], self.step, first, out);
     }
+
+    /// As [`Copied::changes`] for the `count` records of title memory at
+    /// `title` (slot `first` on), 32 bytes each, read where they are, each
+    /// once ([`crate::safecopy::changed`]); `bits` is room. False when a page
+    /// of them could not be read: those before it are done, the others
+    /// stay as last seen.
+    ///
+    /// # Safety
+    /// As [`Copied::changes`]; `title` is title memory (read by a copy that
+    /// fails where a page is not there).
+    pub(crate) unsafe fn changes_in_place(&self, first: u32, title: *const u8, count: usize, bits: &mut Vec<u64>, out: &mut Vec<u32>) -> bool {
+        let at = first as usize * self.step;
+        let count = count.min(self.len.saturating_sub(at) / 32);
+        if self.step != 32 || count == 0 {
+            return true;
+        }
+        bits.clear();
+        bits.resize(count.div_ceil(64), 0);
+        // SAFETY: within the records held; the caller's slots alone.
+        let whole = unsafe { crate::safecopy::changed(title, self.at.add(at), count, bits) };
+        for (n, &word) in bits.iter().enumerate() {
+            let mut word = word;
+            while word != 0 {
+                out.push(first + (n * 64) as u32 + word.trailing_zeros());
+                word &= word - 1;
+            }
+        }
+        whole
+    }
+
+    /// The `count` records last seen from slot `first` on (fewer where the
+    /// heap ends).
+    ///
+    /// # Safety
+    /// As [`Copied::changes`]: no other call beside this one has any of
+    /// these slots.
+    pub(crate) unsafe fn seen(&self, first: u32, count: usize) -> &[u8] {
+        let at = (first as usize * self.step).min(self.len);
+        let len = (count * self.step).min(self.len - at);
+        // SAFETY: within the records held; the caller's slots alone.
+        unsafe { std::slice::from_raw_parts(self.at.add(at), len) }
+    }
 }
 
 /// The records (`step` bytes each, the first is slot `first`) that differ
@@ -5825,6 +5930,38 @@ mod tests {
         // A wider texture written at the same address: slot 1 is stale.
         assert_eq!(heap.note_buffer(2, Some(&view(at, 128)), false), [(1, 0)]);
         assert_eq!(slots(u64::MAX), [2]);
+    }
+
+    /// A write of no placed texture view forgets the slot in the spans
+    /// whether it goes by their lock or not (`spans_quick`): slots that are
+    /// in them stay marked, also one another's view made stale.
+    #[test]
+    fn writes_of_other_views_leave_the_spans_as_under_their_lock() {
+        let Some(heap) = HostHeap::new(false, 8) else {
+            return; // no host GPU
+        };
+        let marked = |slot: u32| heap.spanned.all(|_| true).contains(&slot);
+        let at = 0x7fed_0000_0000u64;
+        let view = |address: u64, width: u32| {
+            let mut desc = [0u32; 16];
+            (desc[10], desc[11]) = (address as u32, (address >> 32) as u32);
+            View::Placed(false, [3, 0, 0, 0, width, 0, 64, 0x1_0001, 98, 1, 0, 0x105, 0, 0], desc)
+        };
+        assert!(heap.note_buffer(1, Some(&view(at, 64)), false).is_empty());
+        assert!(marked(1) && !marked(2));
+        // Slot 1 made stale by slot 2: out of `by_slot`, still in `first`.
+        assert_eq!(heap.note_buffer(2, Some(&view(at, 128)), false), [(1, 0)]);
+        assert!(marked(1) && marked(2));
+        assert!(heap.placed.lock().unwrap().first.contains_key(&1));
+        // Written with no view: forgotten, under the lock, and unmarked.
+        assert!(heap.note_buffer(1, None, false).is_empty());
+        assert!(!marked(1) && !heap.placed.lock().unwrap().first.contains_key(&1));
+        // A slot never in the spans: nothing there to change.
+        assert!(heap.note_buffer(3, None, false).is_empty());
+        assert!(heap.note_buffer(2, None, false).is_empty());
+        let spans = heap.placed.lock().unwrap();
+        assert!(spans.by_slot.is_empty() && spans.by_start.is_empty() && spans.first.is_empty());
+        assert!(heap.spanned.all(|_| true).is_empty());
     }
 
     #[test]

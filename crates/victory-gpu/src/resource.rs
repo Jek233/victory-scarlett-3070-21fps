@@ -1874,7 +1874,7 @@ pub(crate) fn room(memory: Option<[u64; 4]>) -> bool {
 /// loads and gets it back as the targets are made.
 #[cfg(windows)]
 pub(crate) fn targets_room_kept() -> u64 {
-    use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
     static MOST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     let most = *MOST.get_or_init(|| {
         std::env::var("VICTORY_CARD_ROOM_FOR_TARGETS_MB")
@@ -1882,9 +1882,50 @@ pub(crate) fn targets_room_kept() -> u64 {
             .and_then(|v| v.trim().parse::<u64>().ok())
             .map_or(3072 << 20, |mb| mb.min(8192) << 20)
     });
+    static SETTLE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let settle = *SETTLE.get_or_init(|| {
+        std::env::var("VICTORY_CARD_ROOM_FOR_TARGETS_SETTLE_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(20_000)
+    });
     // Every host texture's bytes less those of the copies the title fills.
     let targets = HOST_TEXTURES[1].load(Relaxed).saturating_sub(KINDS[1].load(Relaxed));
-    most.saturating_sub(targets)
+    // The targets' bytes at their last change of 64 MiB or more, and when
+    // they last grew by that much.
+    static GREW: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+    let now = crate::host::now_ms();
+    let (last, since) = (GREW[0].load(Relaxed), GREW[1].load(Relaxed));
+    let (last, since) = targets_seen(last, since, targets, now);
+    GREW[0].store(last, Relaxed);
+    GREW[1].store(since, Relaxed);
+    targets_kept(most, targets, now.saturating_sub(since), settle)
+}
+
+/// [`targets_room_kept`]'s record of the targets' bytes (`last`) and of
+/// when they last grew by 64 MiB (`since`, ms), with `targets` now.
+#[cfg(any(windows, test))]
+fn targets_seen(last: u64, since: u64, targets: u64, now: u64) -> (u64, u64) {
+    const STEP: u64 = 64 << 20;
+    if targets >= last.saturating_add(STEP) {
+        (targets, now)
+    } else if targets.saturating_add(STEP) <= last {
+        (targets, since)
+    } else {
+        (last, since)
+    }
+}
+
+/// What [`targets_room_kept`] keeps of `most`: what the targets do not
+/// hold yet, or nothing once they hold half of it or more and have not
+/// grown for `settle` ms (`still_ms`; `settle` 0: always kept).
+#[cfg(any(windows, test))]
+fn targets_kept(most: u64, targets: u64, still_ms: u64, settle: u64) -> u64 {
+    if settle > 0 && targets >= most / 2 && still_ms >= settle {
+        0
+    } else {
+        most.saturating_sub(targets)
+    }
 }
 
 /// [`room`] as it was at most a tenth of a second ago, for a question

@@ -3264,6 +3264,7 @@ pub fn title_memory_unmapping(at: usize, len: usize) {
 /// was noted of its blocks (guarded, clean, absent) would be taken for true
 /// of the next memory at the address.
 pub fn title_memory_freed(at: usize, len: usize) {
+    crate::shadow::write_combined_freed(at, len);
     // (Coder J, `VICTORY_KNOWN_WRITES`) What it showed goes: a mapping change
     // (run-152's seven changed-or-uncompared misses: pages of streaming GPU-view
     // windows found written by a guard opened here, unreadable, no mark since the take).
